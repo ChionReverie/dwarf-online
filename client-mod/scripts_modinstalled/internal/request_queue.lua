@@ -86,7 +86,7 @@ function Queue:resolve_responses()
             entries_resolved[key] = entry;
         end
 
-        if entry.status == "timeout" then
+        if entry.status == request_queue.QUEUE_STATUS.timeout then
             if entry.on_error then
                 -- Avoid panics when the callback errors
                 dfhack.pcall(entry.on_error, entry)
@@ -96,7 +96,8 @@ function Queue:resolve_responses()
 
         if entry.status == "error" then
             if entry.on_error then
-                entry.on_error(entry)
+                -- Avoid panics when the callback errors
+                dfhack.pcall(entry.on_error, entry)
             end
             entries_resolved[key] = entry;
         end
