@@ -127,20 +127,33 @@ local on_success = function (entry)
 end
 
 ---@param entry request_queue.Entry
-local on_failure = function (entry)
+---@param error dwarf_online.Error
+local on_failure = function (entry, error)
+    if error then
+        dfhack.gui.writeToGamelog(error:build_message())
+    end
     if entry.status == "timeout" then
         dfhack.gui.writeToGamelog("Received no response")
         return
     end
 end
 
-if switches['health-check'] then
+function do_health_check()
     local dwarf_online_api = reqscript('internal/api').exports --[[@as dwarf_online_api]]
     local api = dwarf_online_api.Api:create(state.host, queue)
-    local handle = api:fetch("GET", "/health", on_success, on_failure)
-    if not handle then
-        print("Could not connect to the server.")
+    if api.err then
+        print(api.err:build_message())
+        return
     end
+    local handle = api.ok:fetch("GET", "/health-fake", on_success, on_failure)
+    if handle.err then
+        print(handle.err:build_message())
+        return
+    end
+end
+
+if switches['health-check'] then
+    do_health_check()
 end
 
 local function do_check_queue()

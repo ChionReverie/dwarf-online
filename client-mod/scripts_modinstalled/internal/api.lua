@@ -3,6 +3,7 @@
 
 --- @type luasocket
 local luasocket = require('plugins.luasocket')
+local Error = reqscript('internal/error').exports --[[@as dwarf_online.Error]]
 
 ---@class dwarf_online_api
 local dwarf_online_api = {}
@@ -26,11 +27,12 @@ local Api = dwarf_online_api.Api
 ---comment
 ---@param host string Host address and port
 ---@param queue request_queue.Queue
----@return dwarf_online_api.Api
+---@return dwarf_online.Result<dwarf_online_api.Api>
 function Api:create(host, queue)
     local list = host:split(":");
     if #list > 2 or #list == 0 then
-        dfhack.gui.writeToGamelog("Invalid host " .. host)
+        -- dfhack.gui.writeToGamelog("Invalid host " .. host)
+        return { err = Error:new("Invalid host " .. host) }
     end
 
     local address = list[1];
@@ -47,7 +49,7 @@ function Api:create(host, queue)
     setmetatable(api, self)
     self.__index = self
 
-    return api
+    return { ok = api }
 end
 
 ---@param method http.METHOD
@@ -55,13 +57,13 @@ end
 ---@param on_success? function Callback if the fetch is successful
 ---@param on_error? function Callback if the fetch fails
 ---@nodiscard
----@return request_queue.Handle?
+---@return dwarf_online.Result<request_queue.Handle>
 function Api:fetch(method, resource, on_success, on_error)
     local request_queue = reqscript('internal/request_queue').exports --[[@as request_queue]]
 
     local is_connected, socket = dfhack.pcall(luasocket.tcp.connect, luasocket.tcp, self.address, self.port)
     if not is_connected then
-        return nil
+        return { err = Error:new("Could not connect to the server") }
     end
     local client = socket --[[@as luasocket.client]]
 
@@ -86,5 +88,5 @@ function Api:fetch(method, resource, on_success, on_error)
         on_error = on_error,
     }
 
-    return self.queue:push(queue_entry)
+    return { ok = self.queue:push(queue_entry) }
 end

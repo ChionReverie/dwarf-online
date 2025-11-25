@@ -8,6 +8,7 @@ local http = {}
 ---@type unknown
 exports = http
 
+local Error = reqscript('internal/error').exports --[[@as dwarf_online.Error]]
 
 ---@enum http.RESPONSE_CODE
 http.RESPONSE_CODE = {
@@ -40,10 +41,10 @@ function Response:create_from_status(text)
 
     local pattern = "(HTTP/%d.%d) (%d+) ([%a%s]+)"
     local version, code, comment = string.match(text, pattern)
-    
+
     res.http_version = version
     res.code = tonumber(code)
-    res.comment = comment
+    res.comment = tostring(comment):trim()
 
     setmetatable(res, self)
     self.__index = self
@@ -53,15 +54,14 @@ end
 
 ---@nodiscard
 ---@param line string
----@return "ok" | "error" | "unsupported"
+---@return dwarf_online.Result<"ok" | "unsupported">
 function Response:take_header_line(line)
     line = line:trim()
-    
+
     local pattern = "([%a-]+):(.*)"
     local name, data = line.match(line, pattern);
     if name == nil or data == nil then
-        dfhack.gui.writeToGamelog("Malformed header")
-        return "error"
+        return { err = Error:new("Malformed header") }
     end
     data = data:trim()
     name = string.lower(name)
@@ -72,7 +72,7 @@ function Response:take_header_line(line)
     if name == "content-length" then
         local value = tonumber(data)
         self.content_length = value
-        return "ok"
+        return { ok = "ok" }
     end
 
     if name == "content-type" then
@@ -82,16 +82,16 @@ function Response:take_header_line(line)
         local head = table.remove(list, 1)
 
         local mime_type = string.match(head, pattern_mime_type)
-    
+
         local charset, boundary;
         for _, field in ipairs(list) do
             -- #TODO: Is there a more pleasant way which doesn't involve matching three times?
             local pattern_charset = "charset=(.*)"
             local my_charset = string.match(field, pattern_charset)
-            
+
             local pattern_boundary = "boundary=(.*)"
             local my_boundary = string.match(field, pattern_boundary)
-            
+
             if my_charset then
                 charset = my_charset
             elseif my_boundary then
@@ -104,16 +104,15 @@ function Response:take_header_line(line)
             charset = charset,
             boundary = boundary,
         })
-        return "ok"
+        return { ok = "ok" }
     end
 
-    return "unsupported"
+    return { ok = "unsupported" }
 end
 
 function Response:set_content_type(o)
     self.content_type = o
 end
-
 
 ---@class http.Request
 ---@field method http.METHOD
@@ -170,10 +169,10 @@ end
 function Request:build_string()
     local arr = {};
     table.insert(arr, ("%s %s HTTP/1.1"):format(self.method, self.resource))
-    
-    local host_header = "Host: "..self.host
+
+    local host_header = "Host: " .. self.host
     if self.port ~= nil then
-        host_header = host_header..self.port
+        host_header = host_header .. self.port
     end
     table.insert(arr, host_header)
 

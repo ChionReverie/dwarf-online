@@ -10,6 +10,8 @@ local request_queue = {}
 ---@type unknown
 exports = request_queue
 
+local Error = reqscript('internal/error').exports --[[@as dwarf_online.Error]]
+
 ---@class request_queue.Handle: string
 
 ---@enum request_queue.QUEUE_STATUS
@@ -76,8 +78,16 @@ function Queue:resolve_responses()
     local entries_resolved = {}
 
     for key, entry in pairs(self.list) do
-        entry:try_read()
-        
+        local result = entry:try_read()
+        if result.err then
+            entry.status = request_queue.QUEUE_STATUS.error
+            if entry.on_error then
+                -- Avoid panics when the callback errors
+                dfhack.pcall(entry.on_error, entry, result.err)
+            end
+            entries_resolved[key] = entry;
+        end
+
         if entry.status == request_queue.QUEUE_STATUS.success then
             if entry.on_success then
                 -- Avoid panics when the callback errors
@@ -89,15 +99,8 @@ function Queue:resolve_responses()
         if entry.status == request_queue.QUEUE_STATUS.timeout then
             if entry.on_error then
                 -- Avoid panics when the callback errors
-                dfhack.pcall(entry.on_error, entry)
-            end
-            entries_resolved[key] = entry;
-        end
-
-        if entry.status == "error" then
-            if entry.on_error then
-                -- Avoid panics when the callback errors
-                dfhack.pcall(entry.on_error, entry)
+                local error = Error:new("Request timed out")
+                dfhack.pcall(entry.on_error, entry, error)
             end
             entries_resolved[key] = entry;
         end
@@ -148,49 +151,43 @@ function Entry:next_line()
     }
 end
 
----
---- @return request_queue.Entry
+--- @return dwarf_online.Result<nil>
 function Entry:try_read()
+    -- #TODO: Extract this whole function into HTTP
     local status_line = self:next_line();
-    
+
     if status_line.status == request_queue.READ_STATUS.no_response then
         if os.clock() > self.timeout then
             self.status = request_queue.QUEUE_STATUS.timeout
         end
         -- Otherwise, keep waiting
-        return self
+        return { ok = nil }
     end
 
-    dfhack.gui.writeToGamelog(("Status: %s"):format(status_line.status))
-
     if status_line.status ~= request_queue.READ_STATUS.ok then
-        dfhack.gui.writeToGamelog("Something went wrong when reading status line")
         self.status = request_queue.QUEUE_STATUS.error
-        return self
+        return { err = Error:new("Failed to read Status Line") }
     end
 
     -- Parsing Status
     local http = reqscript('internal/http').exports --[[@as http]]
     local response = http.Response:create_from_status(status_line.line)
     if response == nil then
-        dfhack.gui.writeToGamelog("Something went wrong when parsing status line")
         self.status = request_queue.QUEUE_STATUS.error
-        return self
+        return { err = Error:new("Failed to parse Status Line") }
     end
 
     if response.code ~= http.RESPONSE_CODE.ok then
-        dfhack.gui.writeToGamelog(("Unexpected response code %s (%s)"):format(response.code, response.comment))
         self.status = request_queue.QUEUE_STATUS.error
-        return self
+        return { err = Error:new(("Unexpected response code %s (%s)"):format(response.code, response.comment)) }
     end
 
     -- Headers
     local header_line = self:next_line()
     while header_line.status ~= request_queue.READ_STATUS.no_response do
         if header_line.status == request_queue.READ_STATUS.error then
-            dfhack.gui.writeToGamelog("Something went wrong while reading header line")
             self.status = request_queue.QUEUE_STATUS.error
-            return self
+            return { err = Error:new("Failed to read line") }
         end
 
         -- HTTP header block ends with a newline
@@ -200,10 +197,9 @@ function Entry:try_read()
         end
 
         local result = response:take_header_line(trimmed)
-        if result == "err" then
-            dfhack.gui.writeToGamelog("Something went wrong while parsing header line")
+        if result.err then
             self.status = request_queue.QUEUE_STATUS.error
-            return self
+            return { err = Error:new("Failed to parse header line", result.err) }
         end
 
         -- We're silently ignoring unsupported headers
@@ -215,22 +211,20 @@ function Entry:try_read()
 
     local content_length = response.content_length
     if content_length == nil then
-        dfhack.gui.writeToGamelog("Missing required header: Content length")
         self.status = request_queue.QUEUE_STATUS.error
-        return self
+        return { err = Error:new("Missing required header: Content length") }
     end
 
     --- Body
     local is_ok, body = dfhack.pcall(self.client.receive, self.client, content_length);
     if not is_ok then
-        dfhack.gui.writeToGamelog("Something went wrong while reading request body")
         self.status = request_queue.QUEUE_STATUS.error
-        return self
+        return { err = Error:new("Failed to read request body") }
     end
 
     response.body = body
 
     self.status = request_queue.QUEUE_STATUS.success
     self.response = response
-    return self
+    return { ok = nil }
 end
